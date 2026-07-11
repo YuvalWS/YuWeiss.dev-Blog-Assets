@@ -1,0 +1,6 @@
+# These three shell_command entries belong under the `shell_command:` block in
+# your main configuration.yaml. The package (git_ops.yaml) defines the rest of the
+# shell_commands (pull/sync, checkout, refresh); these are the autocommit variants.
+git_autocommit: "bash /config/autocommit_gemini.sh"
+git_autocommit_bypass: "bash /config/autocommit_gemini.sh --skip-secrets"
+git_autocommit_on_branch: "bash /config/autocommit_gemini.sh --any-branch"

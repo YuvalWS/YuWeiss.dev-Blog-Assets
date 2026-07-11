@@ -1,0 +1,130 @@
+- id: '1766608649979'
+  alias: 'System Maintenance: Backup Config to Git'
+  description: Checks for changes and commits them with AI message. Features configurable
+    notification for empty commits.
+  triggers:
+  - trigger: time
+    at: 02:00:00
+  conditions: []
+  actions:
+  - alias: Execute the git bash script
+    action: shell_command.git_autocommit
+    response_variable: cmd_result
+  - alias: Evaluate script results and notify accordingly
+    choose:
+    - alias: 'Condition: Secret Detected (Exit code 2)'
+      conditions:
+      - condition: template
+        value_template: '{{ cmd_result[''returncode''] == 2 }}'
+      sequence:
+      - alias: Send Secret Detected Notification
+        action: persistent_notification.create
+        data:
+          title: "\U0001F6A8 Git Backup BLOCKED — Secret Detected"
+          message: 'The backup was aborted because the diff appears to contain a secret.
+            Review the staged changes before re-running.
+
+            ---
+
+            **Scanner Output:** ```text {{ cmd_result[''stderr''] }} ```
+
+            '
+          notification_id: git_secret
+    - alias: 'Condition: Push Rejected — Remote Has New Commits (Exit code 3)'
+      conditions:
+      - condition: template
+        value_template: '{{ cmd_result[''returncode''] == 3 }}'
+      sequence:
+      - alias: Send Push Conflict Notification
+        action: persistent_notification.create
+        data:
+          title: '⚠️ Git Backup: Push Rejected'
+          message: 'Remote has new commits. Press **Git Sync** on the dashboard to
+            pull and retry.
+
+
+            ---
+
+
+            **Script Output:** ```text {{ cmd_result[''stderr''] }} ```
+
+            '
+          notification_id: git_push_conflict
+    - alias: 'Condition: HA on Non-Main Branch (Exit code 4)'
+      conditions:
+      - condition: template
+        value_template: '{{ cmd_result[''returncode''] == 4 }}'
+      sequence:
+      - alias: Send Branch Warning Notification
+        action: persistent_notification.create
+        data:
+          title: '⚠️ Git Backup: Skipped — Not on Main'
+          message: 'HA is running on a non-main branch. Autocommit skipped to avoid
+            committing to the wrong branch.
+
+
+            If the changes are intentional for this branch, press **Commit on Branch**
+            on the dashboard.
+
+
+            ---
+
+
+            **Script Output:** ```text {{ cmd_result[''stderr''] }} ```
+
+            '
+          notification_id: git_not_on_main
+    - alias: 'Condition: Script Failed (Non-zero exit code)'
+      conditions:
+      - condition: template
+        value_template: '{{ cmd_result[''returncode''] != 0 }}'
+      sequence:
+      - alias: Send Failure Notification
+        action: persistent_notification.create
+        data:
+          title: ❌ Git Backup Failed
+          message: 'The backup script encountered an error.
+
+            ---
+
+            **Error Log:** ```text {{ cmd_result[''stderr''] }} {{ cmd_result[''stdout'']
+            }} ```
+
+            '
+          notification_id: git_failure
+    - alias: 'Condition: No Changes to Commit (Outputs ''No changes'' string)'
+      conditions:
+      - condition: template
+        value_template: '{{ cmd_result[''returncode''] == 0 and ''No changes to commit''
+          in cmd_result[''stdout''] }}'
+      sequence:
+      - alias: Check if we should notify for no changes
+        if:
+        - condition: template
+          value_template: '{{ notify_on_no_changes }}'
+        then:
+        - alias: Send No Changes Notification
+          action: persistent_notification.create
+          data:
+            title: 'ℹ️ Git Backup: No Changes'
+            message: There were no new changes to commit to the repository tonight.
+            notification_id: git_no_changes
+    - alias: 'Condition: Successful Commit and Push'
+      conditions:
+      - condition: template
+        value_template: '{{ cmd_result[''returncode''] == 0 and ''No changes to commit''
+          not in cmd_result[''stdout''] }}'
+      sequence:
+      - alias: Send Success Notification
+        action: persistent_notification.create
+        data:
+          title: ✅ Git Backup Success
+          message: "The configuration was successfully committed and pushed.\n**AI
+            Commit Message:**  {% if 'Committing with message: ' in cmd_result['stdout']
+            %}\n  {{ cmd_result['stdout'].split('Committing with message: ')[1].split('\\n')[0]
+            }}\n{% else %}\n  Could not parse message.\n{% endif %}\n---\n**Raw Script
+            Output:** ```text {{ cmd_result['stdout'] }} ```\n"
+          notification_id: git_success
+  variables:
+    notify_on_no_changes: false
+  mode: single

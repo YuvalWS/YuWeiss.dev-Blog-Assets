@@ -1,0 +1,243 @@
+command_line:
+  - sensor:
+      name: Git Current Branch
+      unique_id: git_current_branch
+      icon: mdi:source-branch
+      command: "git -C /config branch --show-current"
+      scan_interval: 30
+
+input_button:
+  git_sync:
+    name: Git Sync
+    icon: mdi:source-pull
+  git_commit_on_branch:
+    name: Commit on Branch
+    icon: mdi:source-branch-check
+  git_refresh_branches:
+    name: Refresh Branch List
+    icon: mdi:refresh
+  git_checkout_branch:
+    name: Checkout Branch
+    icon: mdi:source-branch-sync
+  git_autocommit_bypass:
+    name: Autocommit (skip secrets scan)
+    icon: mdi:shield-off-outline
+
+input_select:
+  git_branch_checkout:
+    name: Branch to Checkout
+    options:
+      - "(refresh to load)"
+    icon: mdi:source-branch
+
+shell_command:
+  git_pull_and_sync: "bash /config/scripts/git_pull_and_sync.sh"
+  git_refresh_branches: "bash /config/scripts/git_refresh_branches.sh"
+  git_read_branches: "cat /tmp/git_branches.txt"
+  git_checkout_branch: "bash /config/scripts/git_checkout_branch.sh '{{ states('input_select.git_branch_checkout') }}'"
+  git_checkout_main: "git -C /config checkout main"
+
+script:
+  git_sync_with_remote:
+    alias: Git Sync with Remote
+    sequence:
+    - alias: Run pull and sync script
+      action: shell_command.git_pull_and_sync
+      response_variable: sync_result
+    - alias: Evaluate result
+      choose:
+      - alias: Conflict requires manual resolution
+        conditions:
+        - condition: template
+          value_template: '{{ sync_result[''returncode''] == 1 }}'
+        sequence:
+        - alias: Update notification with conflict details
+          action: persistent_notification.create
+          data:
+            title: "⚠️ Git Sync: Manual Resolution Required"
+            message: "Sync failed — remote and local changes overlap and cannot be\
+              \ merged automatically (either a rebase conflict or a UI-change vs pulled-commit\
+              \ conflict). Repo is left clean. Resolve via SSH:\n  ```\n  git pull\
+              \ --rebase\n  # fix conflicts, then:\n  git rebase --continue\n  git\
+              \ push\n  ```\n\n---\n\n**Error:** ```text {{ sync_result['stderr'] }}\
+              \ ```\n"
+            notification_id: git_push_conflict
+      - alias: Success
+        conditions:
+        - condition: template
+          value_template: '{{ sync_result[''returncode''] == 0 }}'
+        sequence:
+        - alias: Dismiss push conflict notification
+          action: persistent_notification.dismiss
+          data:
+            notification_id: git_push_conflict
+        - alias: Confirm success
+          action: persistent_notification.create
+          data:
+            title: "✅ Git Sync: Success"
+            message: Pulled and pushed successfully.
+            notification_id: git_sync_success
+      default:
+      - alias: Send generic failure notification
+        action: persistent_notification.create
+        data:
+          title: "❌ Git Sync: Failed"
+          message: "Sync failed.\n\n---\n\n**Error:** ```text {{ sync_result['stderr']\
+            \ }} ```\n"
+          notification_id: git_push_conflict
+    mode: single
+    icon: mdi:source-pull
+
+  git_refresh_branch_list:
+    alias: Refresh Branch List
+    sequence:
+    - alias: Fetch remote and write branch list to temp file
+      action: shell_command.git_refresh_branches
+    - alias: Read branch list from temp file
+      action: shell_command.git_read_branches
+      response_variable: branches_result
+    - alias: Populate branch selector with fetched branches
+      action: input_select.set_options
+      target:
+        entity_id: input_select.git_branch_checkout
+      data:
+        options: "{{ branches_result['stdout'].strip().split('\n') | select('ne', '') | list }}"
+    mode: single
+    icon: mdi:refresh
+
+  git_checkout_selected_branch:
+    alias: Checkout Selected Branch
+    sequence:
+    - alias: Run checkout and config check script
+      action: shell_command.git_checkout_branch
+      response_variable: checkout_result
+    - alias: Evaluate result
+      choose:
+      - alias: Config check passed — restart HA
+        conditions:
+        - condition: template
+          value_template: '{{ checkout_result[''returncode''] == 0 }}'
+        sequence:
+        - action: persistent_notification.create
+          data:
+            title: "✅ Branch Checked Out"
+            message: "Checked out {{ states('input_select.git_branch_checkout') }}.\
+              \ Config check passed. Restarting HA..."
+            notification_id: git_checkout_result
+        - action: homeassistant.restart
+      - alias: Config check failed — reverted to main
+        conditions:
+        - condition: template
+          value_template: '{{ checkout_result[''returncode''] == 1 }}'
+        sequence:
+        - action: persistent_notification.create
+          data:
+            title: "❌ Checkout Failed: Config Error (reverted to main)"
+            message: "Config check failed for {{ states('input_select.git_branch_checkout')\
+              \ }}. Reverted to main.\n\n**Error:** ```text {{ checkout_result['stderr']\
+              \ }} ```\n"
+            notification_id: git_checkout_result
+      default:
+      - action: persistent_notification.create
+        data:
+          title: "❌ Checkout Failed: Git Error"
+          message: "Could not check out {{ states('input_select.git_branch_checkout')\
+            \ }}.\n\n**Error:** ```text {{ checkout_result['stderr'] }} {{ checkout_result['stdout']\
+            \ }} ```\n"
+          notification_id: git_checkout_result
+    mode: single
+    icon: mdi:source-branch-sync
+
+automation:
+  - alias: Git Sync button pressed
+    id: git_sync_button_pressed
+    triggers:
+    - trigger: state
+      entity_id: input_button.git_sync
+    actions:
+    - action: script.git_sync_with_remote
+    mode: single
+
+  - alias: Commit on Branch button pressed
+    id: git_commit_on_branch_pressed
+    triggers:
+    - trigger: state
+      entity_id: input_button.git_commit_on_branch
+    actions:
+    - alias: Run autocommit with --any-branch flag
+      action: shell_command.git_autocommit_on_branch
+      response_variable: cmd_result
+    - alias: Evaluate result
+      choose:
+      - alias: Success
+        conditions:
+        - condition: template
+          value_template: '{{ cmd_result[''returncode''] == 0 }}'
+        sequence:
+        - alias: Dismiss branch warning and confirm
+          action: persistent_notification.dismiss
+          data:
+            notification_id: git_not_on_main
+        - action: persistent_notification.create
+          data:
+            title: "✅ Git Commit on Branch: Success"
+            message: "Committed and pushed on branch.\n\n**Output:** ```text {{ cmd_result['stdout']\
+              \ }} ```\n"
+            notification_id: git_commit_on_branch_result
+      default:
+      - action: persistent_notification.create
+        data:
+          title: "❌ Git Commit on Branch: Failed"
+          message: "Commit failed.\n\n**Error:** ```text {{ cmd_result['stderr'] }}\
+            \ {{ cmd_result['stdout'] }} ```\n"
+          notification_id: git_commit_on_branch_result
+    mode: single
+
+  - alias: Refresh Branches button pressed
+    id: git_refresh_branches_pressed
+    triggers:
+    - trigger: state
+      entity_id: input_button.git_refresh_branches
+    actions:
+    - action: script.git_refresh_branch_list
+    mode: single
+
+  - alias: Checkout Branch button pressed
+    id: git_checkout_branch_pressed
+    triggers:
+    - trigger: state
+      entity_id: input_button.git_checkout_branch
+    actions:
+    - action: script.git_checkout_selected_branch
+    mode: single
+
+  - alias: Autocommit bypass (skip secrets scan) button pressed
+    id: git_autocommit_bypass_pressed
+    triggers:
+    - trigger: state
+      entity_id: input_button.git_autocommit_bypass
+    actions:
+    - alias: Run autocommit with --skip-secrets flag
+      action: shell_command.git_autocommit_bypass
+      response_variable: cmd_result
+    - alias: Evaluate result
+      choose:
+      - alias: Success
+        conditions:
+        - condition: template
+          value_template: '{{ cmd_result[''returncode''] == 0 }}'
+        sequence:
+        - action: persistent_notification.create
+          data:
+            title: "✅ Autocommit (bypass): Success"
+            message: "Committed and pushed (secrets scan skipped).\n\n**Output:**\
+              \ ```text {{ cmd_result['stdout'] }} ```\n"
+            notification_id: git_autocommit_bypass_result
+      default:
+      - action: persistent_notification.create
+        data:
+          title: "❌ Autocommit (bypass): Failed"
+          message: "Commit failed.\n\n**Error:** ```text {{ cmd_result['stderr'] }}\
+            \ {{ cmd_result['stdout'] }} ```\n"
+          notification_id: git_autocommit_bypass_result
+    mode: single
