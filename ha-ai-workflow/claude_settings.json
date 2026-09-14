@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m yamllint -c .yamllint.yml packages/git_ops.yaml)",
+      "Bash(yamllint automations.yaml)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/yamllint.sh",
+            "statusMessage": "Linting YAML..."
+          }
+        ]
+      }
+    ]
+  }
+}

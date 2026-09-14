@@ -1,0 +1,10 @@
+repos:
+  - repo: local
+    hooks:
+      - id: yamllint
+        name: yamllint
+        language: python
+        entry: yamllint
+        args: [-c, .yamllint.yml]
+        types: [yaml]
+        additional_dependencies: [yamllint]

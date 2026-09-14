@@ -1,0 +1,138 @@
+name: Validate HA Config
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Normalize line endings
+        run: find . -name "*.yaml" -not -path "./.git/*" -exec sed -i 's/\r$//' {} +
+      - uses: ibiqlik/action-yamllint@v3
+        with:
+          config_file: .yamllint.yml
+
+  ha-config-check:
+    name: HA Config Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare CI environment
+        run: |
+          cp secrets.fake.yaml secrets.yaml
+
+          # Directories referenced in config but not tracked (git ignores empty dirs)
+          mkdir -p packages themes
+
+          # Remove SSL cert/key — frenck's container can't reach host /ssl/; not needed for config check
+          sed -i '/ssl_certificate:/d; /ssl_key:/d' configuration.yaml
+
+          # Stub SERVICE_ACCOUNT.json — required by google_assistant integration
+          cat > SERVICE_ACCOUNT.json <<'EOF'
+          {
+            "type": "service_account",
+            "project_id": "ci-placeholder",
+            "private_key_id": "placeholder",
+            "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAplaceholder\n-----END RSA PRIVATE KEY-----\n",
+            "client_email": "ci@ci-placeholder.iam.gserviceaccount.com",
+            "client_id": "000000000000000000000",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": ""
+          }
+          EOF
+
+          # Stub SmartIR custom component — referenced as platform in configuration.yaml
+          mkdir -p custom_components/smartir
+          cat > custom_components/smartir/manifest.json <<'EOF'
+          {
+            "domain": "smartir",
+            "name": "SmartIR",
+            "version": "1.0.0",
+            "documentation": "",
+            "requirements": [],
+            "dependencies": [],
+            "codeowners": []
+          }
+          EOF
+          cat > custom_components/smartir/__init__.py <<'EOF'
+          DOMAIN = "smartir"
+
+          async def async_setup(hass, config):
+              return True
+          EOF
+          cat > custom_components/smartir/climate.py <<'EOF'
+          async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+              pass
+          EOF
+          cat > custom_components/smartir/media_player.py <<'EOF'
+          async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+              pass
+          EOF
+
+      - uses: frenck/action-home-assistant@v1
+        with:
+          path: "."
+
+  notify-ha:
+    name: Notify HA
+    runs-on: ubuntu-latest
+    # Only after both checks are green, and only for PRs — a push to main isn't
+    # something to go check out on the Pi.
+    #
+    # Runners call in from outside the home network, which the edge refuses by
+    # default, so the webhook path needs its own allow rule - see network.md.
+    needs: [yamllint, ha-config-check]
+    if: github.event_name == 'pull_request'
+    permissions: {}
+    steps:
+      - name: Tell Home Assistant the PR is green
+        env:
+          # Fork PRs don't get repository secrets, so this comes out empty there
+          # and the step below no-ops.
+          HA_CI_WEBHOOK_URL: ${{ secrets.HA_CI_WEBHOOK_URL }}
+          # Passed through the environment rather than interpolated into the
+          # script: a PR title is attacker-controlled text on a public repo.
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if [ -z "$HA_CI_WEBHOOK_URL" ]; then
+            echo "HA_CI_WEBHOOK_URL is not set — skipping the notification."
+            exit 0
+          fi
+
+          # jq builds the JSON so quotes or newlines in the PR title can't break
+          # out of the payload.
+          PAYLOAD=$(jq -n \
+            --arg branch "$PR_BRANCH" \
+            --arg number "$PR_NUMBER" \
+            --arg title "$PR_TITLE" \
+            --arg url "$PR_URL" \
+            '{branch: $branch, number: $number, title: $title, url: $url}')
+
+          # The URL is a repository secret, so GitHub masks it out of the log.
+          # 000 stands in for "curl never got an answer" (DNS, timeout, TLS).
+          HTTP_CODE=$(curl --silent --show-error --max-time 20 \
+            --retry 3 --retry-connrefused \
+            --write-out '%{http_code}' --output /dev/null \
+            -X POST "$HA_CI_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -d "$PAYLOAD") || HTTP_CODE="000"
+
+          # A notification is a convenience. The Pi being asleep, rebooting or
+          # behind a home internet outage says nothing about whether this PR is
+          # good, so a missed doorbell warns instead of blocking the merge.
+          case "$HTTP_CODE" in
+            2*) echo "Home Assistant notified." ;;
+            *)  echo "::warning::Home Assistant did not take the notification (HTTP $HTTP_CODE) — the PR itself is unaffected." ;;
+          esac
