@@ -1,0 +1,35 @@
+# configuration.yaml
+#
+# Fires the Claude release monitor routine, handing it the context the repo
+# cannot show: every live entity domain (so UI-configured integrations count)
+# and every installed HACS component (deliberately not committed).
+#
+# secrets.yaml needs:
+#   claude_routine_authorization: "Bearer <your routine token>"
+
+rest_command:
+  trigger_ha_release_monitor:
+    url: "https://api.anthropic.com/v1/claude_code/routines/trig_YOUR_ROUTINE_ID/fire"
+    method: POST
+    headers:
+      Authorization: !secret claude_routine_authorization
+      anthropic-version: "2023-06-01"
+      anthropic-beta: "experimental-cc-routine-2026-04-01"
+      Content-Type: application/json
+    payload: >-
+      {"text": {{
+        ("Triggered by HA. New release: "
+        ~ state_attr('update.home_assistant_core_update', 'latest_version')
+        ~ ". Installed: "
+        ~ state_attr('update.home_assistant_core_update', 'installed_version')
+        ~ ". Live entity domains: ["
+        ~ (states | map(attribute='domain') | unique
+        | reject('in', ['persistent_notification', 'automation', 'script', 'scene',
+                        'group', 'device_tracker', 'person', 'sun', 'zone', 'tag',
+                        'event', 'update', 'input_button', 'input_boolean',
+                        'input_number', 'input_text', 'input_select', 'input_datetime'])
+        | list | join(', '))
+        ~ "]. Custom (HACS) components: ["
+        ~ (integration_entities('hacs') | select('match', 'update\.')
+        | map('state_attr', 'friendly_name') | select('string') | sort | join(', '))
+        ~ "]") | to_json }}}

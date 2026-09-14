@@ -1,0 +1,34 @@
+# automations.yaml
+#
+# Only major (X.Y.0) releases trigger the routine — patch releases are skipped.
+# Two triggers, not one: if the update entity is already `on` from a pending
+# patch, a new major release only changes the latest_version attribute and
+# would never re-fire a plain state trigger.
+
+- id: trigger_claude_on_major_ha_release
+  alias: 'Maintenance: Trigger Claude release analysis on major HA release'
+  description: >-
+    Fires the Claude release monitor routine when a major (X.Y.0) HA release
+    becomes available. Passes the version and live entity domains so the routine
+    skips auto-discovery. Dual-trigger handles the edge case where the update
+    entity is already on from a pending patch when a major release drops.
+  triggers:
+  - trigger: state
+    entity_id: update.home_assistant_core_update
+    to: 'on'
+    not_from:
+    - unknown
+    - unavailable
+  - trigger: state
+    entity_id: update.home_assistant_core_update
+    attribute: latest_version
+  conditions:
+  - condition: template
+    alias: Latest version is a major release (patch number is 0)
+    value_template: >-
+      {% set v = state_attr('update.home_assistant_core_update', 'latest_version') %}
+      {{ v is not none and v.split('.')[-1] == '0' }}
+  actions:
+  - alias: Fire Claude release monitor routine
+    action: rest_command.trigger_ha_release_monitor
+  mode: single
