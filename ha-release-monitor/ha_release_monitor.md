@@ -17,6 +17,9 @@ hand-sync. Never put tokens or secrets in this file.
   on THIS repo go through the GitHub MCP tools (e.g. `mcp__github__list_issues`,
   `mcp__github__issue_write`), scoped to <your-user>/Home-Assistant-Config.
 - This repo is checked out in the working directory — read its files with Read/Glob.
+- The live HA instance is readable through the `ha-ro-mcp` MCP server (read-only; load its tools
+  with ToolSearch, e.g. `select:mcp__ha-ro-mcp__list_config_entry_domains`). It is the only
+  source for UI-configured integrations and for the devices in the house — see Step 4.
 
 ---
 
@@ -51,6 +54,11 @@ For each of the two releases (new month + previous month):
    link to the release post, or WebSearch `site:home-assistant.io/blog release-{YEAR}{MM:02d}`.
 2. WebFetch the post and extract: all breaking changes, deprecations, new integrations, the
    headline/marquee features highlighted at the top, and other notable changes.
+3. **Read the whole post.** Release posts run well past one WebFetch window; when the result says
+   the page was truncated, call again with the `offset` it gives until the end. The
+   per-integration sections ("New integrations", "Integrations now available to set up from the
+   UI", "Noteworthy improvements to existing integrations", the integration notes inside headline
+   features) are where most opportunities hide — never analyse from the top of the post alone.
 
 If the new month's post is not yet published, note it and continue with the previous month only.
 
@@ -61,7 +69,11 @@ If the new month's post is not yet published, note it and continue with the prev
 The repo is checked out in the working directory. Use Read/Glob directly:
 - Read configuration.yaml, automations.yaml, scripts.yaml, template_sensors.yaml
 - Glob + read all .yaml files under packages/ and esphome/
-- Glob .storage/lovelace* and read each (dashboard card types)
+- The dashboards: read them live through ha-ro-mcp (`get_lovelace_dashboards`, then
+  `get_lovelace_config` for each, and `get_lovelace_resources`). The `.storage/lovelace*` copies
+  in git lag the live instance; fall back to them only if ha-ro-mcp is unreachable. Note per
+  dashboard: view types (`sections`, masonry, panel), card types and the options they set, badges,
+  and the `custom:` cards together with what each is used for.
 - custom_components/ is NOT in the repo (source code is deliberately not committed).
   The installed custom integrations arrive in the trigger context instead — see below.
 
@@ -74,8 +86,21 @@ If the trigger context is absent (a manual or scheduled run rather than an HA-tr
 one), say so in the issue's "What was reviewed" section — the analysis is then based on
 the repo alone and may miss UI-configured and custom integrations.
 
-Build a picture of: configured integrations (top-level YAML keys like `hue:`, `zwave_js:`),
-custom components, dashboard card types (especially `custom:` cards), and live entity domains.
+**The live integration and device lists (ha-ro-mcp) — required.** Most integrations here are
+set up in the UI and appear nowhere in the YAML or in the domain list (a Reolink or Matter entry
+shows up only as `camera` / `sensor` entities). So:
+- `mcp__ha-ro-mcp__list_config_entry_domains` — every configured integration. This, not the YAML,
+  is the list to check breaking changes and integration features against.
+- `mcp__ha-ro-mcp__search_devices` (by manufacturer / search term) — the hardware in the house,
+  to match new integrations against devices that are already there under another integration
+  or none.
+
+If ha-ro-mcp is unreachable, say so in the issue's "What was reviewed" section — the review then
+can't see UI-configured integrations.
+
+Build a picture of: configured integrations (config entry domains plus top-level YAML keys like
+`hue:`, `zwave_js:`), devices and their manufacturers, custom components, dashboard card types
+(especially `custom:` cards), and live entity domains.
 
 ---
 
@@ -90,7 +115,21 @@ Produce a focused, actionable list. Two kinds of items belong in the issue:
 - New features for integrations, dashboards, ESPHome, or custom components already in use
 - Features for domains in the live entity domains list
 
-**B. Headline features of the release** (the items highlighted at the top of the blog post):
+**B. Opportunities: new things this setup can use.** As important as breaking changes:
+- Every **new integration** in the post: check it against the device registry and the YAML. A new
+  integration for hardware already in the house (an HP printer currently on IPP or a shell
+  command, a brand with devices on a generic integration) is an item.
+- Every **improvement to an existing integration**, including ones mentioned inside a headline
+  feature (e.g. "two-way audio for Reolink cameras" when `reolink` is configured): check it
+  against the config entry domains.
+- Labs/preview features count — say that they are previews.
+- Every **dashboard feature** (new cards, badges, card options, view and section features, editor
+  improvements): check it against the dashboards read in Step 4. An item names the dashboard and
+  view it applies to. The strongest are: a new option for a card type already in use, a built-in
+  feature that could replace a `custom:` card or a template workaround, and a feature that fits
+  what a view shows (e.g. a new badge for an entity that view already displays).
+
+**C. Headline features of the release** (the items highlighted at the top of the blog post):
 Include the marquee new capabilities even if not tied to an already-configured integration,
 when they could plausibly benefit a Raspberry-Pi smart home — e.g. performance improvements,
 new core capabilities, voice, dashboards, automation tooling. The user wants to hear about the
@@ -102,6 +141,8 @@ release's flagship features, not only integration-specific tweaks.
   If a breaking change doesn't affect this setup, silently omit it (e.g. no Z-Wave in the setup
   → don't mention Z-Wave at all).
 - Skip pure marketing with no technical substance, and integrations absent from the setup.
+- "Absent" means absent from the config entries, the device registry **and** the YAML. A grep of
+  the YAML that finds nothing proves nothing — most integrations are UI-configured.
 
 ---
 
@@ -124,7 +165,8 @@ and list nothing further — do not enumerate the ones you checked and cleared.]
   > "{Relevant quote from blog post}"
   Source: {link to blog section}
 
-(order: breaking changes → config/YAML changes → headline features → integration features → dashboard)
+(order: breaking changes → config/YAML changes → new integrations for existing hardware →
+ integration features → headline features → dashboard)
 
 ## What was reviewed
 - {prev_version} post: {url}

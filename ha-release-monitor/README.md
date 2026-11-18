@@ -15,3 +15,12 @@ affect you.
 
 Set `claude_routine_authorization` in `secrets.yaml` to `Bearer <your routine token>`, and
 replace `trig_YOUR_ROUTINE_ID` in `rest_command.yaml` with your own routine ID.
+
+## Live Home Assistant access (`ha-ro-mcp`)
+
+Most integrations are set up in the UI, so they appear nowhere in your YAML. The routine
+therefore reads the configured integrations, the device list and the live dashboards through a
+read-only Home Assistant MCP server it expects under the name `ha-ro-mcp`, registered for the
+routine's repo. Without it the routine still runs, but it says so under "What was reviewed" and
+analyses the repo alone: UI-configured integrations are invisible to it and dashboards come from
+the `.storage/lovelace*` copies in git, which lag the live instance.

@@ -31,5 +31,5 @@ rest_command:
         | list | join(', '))
         ~ "]. Custom (HACS) components: ["
         ~ (integration_entities('hacs') | select('match', 'update\.')
-        | map('state_attr', 'friendly_name') | select('string') | sort | join(', '))
+        | map('device_name') | select('string') | sort | join(', '))
         ~ "]") | to_json }}}
